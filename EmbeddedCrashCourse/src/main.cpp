@@ -1,24 +1,21 @@
 #include <Arduino.h>
 
 #include <SoftwareSerial.h>
+#include <HardwareSerial.h>
 
 #include <ros.h>
 #include <std_msgs/Float64MultiArray.h>
 #include <std_msgs/String.h>
 
-
-
 /* ----------------- MACROS AND CONSTANTS --------------------- */
 #define ARRAY_LEN 1
-
+#define STR_MSG_LEN 6
 #define TRUE 1
 #define FALSE 0
 
 
 const float radian_map_coef = 300;
 /* ------------------------------------------------------------ */
-
-
 
 ros::NodeHandle nh;
 
@@ -31,6 +28,10 @@ void generateStrMsg();
 String floatToStr(float radian_data);
 
 void readDataFromMCU();
+void parseEncoderFeedback();
+float detectDirection(char direction_byte);
+float decodeRadians(String mapped_radian);
+void publishEncoderFeedback();
 
 
 /* ---------------- GLOBAL VARIABLES -------------------- */
@@ -42,19 +43,17 @@ std_msgs::String debug_str;
 char debug_ch[50];
 
 float commands_to_send[ARRAY_LEN];
-float enc_feedback_to_send[ARRAY_LEN];
+float enc_feedback_to_send[ARRAY_LEN] = {1.57};
 
 String str_angle_command;
-String str_enc_feedback;
+String str_enc_feedback = "A0150B";
 
 int incoming_byte;
-char buf[1];
-char str_arr[7];
+char str_arr[STR_MSG_LEN+1];
 
-int receive_counter = 0;
 int receive_cnt_flag = FALSE;
 
-String incoming_str = "";
+
 /* ------------------------------------------------------- */
 
 
@@ -89,21 +88,12 @@ void setup(){
 void loop(){
     nh.spinOnce();
 
-    //processData();
+    processData();
     readDataFromMCU();
+    publishEncoderFeedback();
 
-    
+    delay(50);
 
-
-    /*
-    if (armSerial.available() > 0){
-        incoming_byte = armSerial.read();
-        buf[0] = incoming_byte;
-        nh.loginfo(buf);
-    }
-    */
-
-    //feedback_pub.publish(&feedback_arr);
     
 }
 
@@ -111,28 +101,80 @@ void loop(){
 
 void readDataFromMCU(){
      
-    
-    
     if (armSerial.available() > 0){
         incoming_byte = armSerial.read();
         if (incoming_byte == 'A'){
-            incoming_str = "";
-            incoming_str += (char) incoming_byte;
+            str_enc_feedback = "";
+            str_enc_feedback += (char) incoming_byte;
             return;
         }
         else if (receive_cnt_flag = TRUE && incoming_byte != 'B'){
-            incoming_str += (char) incoming_byte;
+            str_enc_feedback += (char) incoming_byte;
         }
         else if (incoming_byte == 'B'){
-            incoming_str += (char) incoming_byte;
-            incoming_str.toCharArray(str_arr,7);
+            str_enc_feedback += (char) incoming_byte;
+            str_enc_feedback.toCharArray(str_arr,STR_MSG_LEN+1);
             nh.loginfo(str_arr);
-            incoming_str = "";
+
+            
+            parseEncoderFeedback();
+            publishEncoderFeedback();
+
+            str_enc_feedback = "";
         }   
 
     }
 }
 
+void publishEncoderFeedback(){
+
+    for (int i = 0; i < ARRAY_LEN; i++){
+        feedback_arr.data[i] = enc_feedback_to_send[i];
+    }
+    feedback_pub.publish(&feedback_arr);
+
+}
+
+//------------------  WIP  ------------------//
+void parseEncoderFeedback(){
+
+  if (str_enc_feedback[0] == 'A' && str_enc_feedback[STR_MSG_LEN-1] == 'B'){
+    float direction;
+    float angle;
+    String mapped;
+    int counter = 0;
+    for (int i = 0; i < ARRAY_LEN; i += 4){
+      mapped = "";
+      direction = detectDirection(str_enc_feedback[i+1]);
+      mapped += str_enc_feedback[i+2] + str_enc_feedback[i+3] + str_enc_feedback[i+4];
+      angle = decodeRadians(mapped);
+      enc_feedback_to_send[counter] = direction*angle;
+      counter++;
+    }
+
+  }
+
+  return;
+}
+
+float detectDirection(char direction_byte){
+  if (direction_byte == '0'){
+    return -1.0;
+  }
+  else{
+    return 1.0;
+  }
+}
+
+float decodeRadians(String mapped_radian){
+  float in_radians = mapped_radian.toFloat();
+
+  in_radians = in_radians/radian_map_coef;
+
+  return in_radians;
+}
+
+//------------------  WIP  ------------------//
 
 void processData(){
     for (int i=0; i<ARRAY_LEN;i++){
@@ -145,7 +187,7 @@ void commandCallback(const std_msgs::Float64MultiArray &command_msg){
         commands_to_send[i] = command_msg.data[i];
     }
     nh.loginfo("New command!");
-    feedback_pub.publish(&feedback_arr);
+    
 
 
     generateStrMsg();
